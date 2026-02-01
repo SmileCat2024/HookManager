@@ -40,7 +40,7 @@ export class HookInterceptor {
 
   constructor(options: HookInterceptorOptions = {}) {
     this.options = {
-      configPath: options.configPath || '~/.claude/hooks/config.json',
+      configPath: options.configPath || '~/.claude/hooks/hookmanager',
       projectPath: options.projectPath || process.cwd(),
       logLevel: options.logLevel || LogLevel.INFO,
       logPath: options.logPath || '~/.claude/logs/hookmanager.log',
@@ -254,14 +254,20 @@ export class HookInterceptor {
   /**
    * Register a new hook dynamically
    */
-  async registerHook(hookConfig: any): Promise<void> {
+  async registerHook(hookConfig: any, isGlobal: boolean = false): Promise<void> {
     if (!this.initialized) {
       await this.initialize();
     }
 
+    // Set scope metadata
+    if (!hookConfig.metadata) {
+      hookConfig.metadata = {};
+    }
+    hookConfig.metadata._scope = isGlobal ? 'global' : 'project';
+
     await this.registry.register(hookConfig);
-    await this.configManager.addHook(hookConfig);
-    this.logger.info(`Registered new hook: ${hookConfig.name}`);
+    await this.configManager.addHook(hookConfig, isGlobal);
+    this.logger.info(`Registered new hook: ${hookConfig.name} (${isGlobal ? 'global' : 'project'})`);
   }
 
   /**

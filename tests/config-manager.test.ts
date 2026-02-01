@@ -106,7 +106,7 @@ describe('ConfigManager', () => {
     });
 
     it('should load project config if exists', async () => {
-      const projectConfigPath = path.join(projectPath, '.claude', 'hooks', 'config.json');
+      const projectConfigPath = path.join(projectPath, '.claude', 'hooks', 'hookmanager', 'config.json');
       await fs.ensureDir(path.dirname(projectConfigPath));
       await fs.writeJson(projectConfigPath, {
         version: '1.0.0',
@@ -180,7 +180,7 @@ describe('ConfigManager', () => {
       });
 
       // Create project config with a hook
-      const projectConfigPath = path.join(projectPath, '.claude', 'hooks', 'config.json');
+      const projectConfigPath = path.join(projectPath, '.claude', 'hooks', 'hookmanager', 'config.json');
       await fs.ensureDir(path.dirname(projectConfigPath));
       await fs.writeJson(projectConfigPath, {
         version: '1.0.0',
@@ -264,7 +264,7 @@ describe('ConfigManager', () => {
         },
       });
 
-      const projectConfigPath = path.join(projectPath, '.claude', 'hooks', 'config.json');
+      const projectConfigPath = path.join(projectPath, '.claude', 'hooks', 'hookmanager', 'config.json');
       await fs.ensureDir(path.dirname(projectConfigPath));
       await fs.writeJson(projectConfigPath, {
         version: '1.0.0',
@@ -315,7 +315,7 @@ describe('ConfigManager', () => {
         },
       });
 
-      const projectConfigPath = path.join(projectPath, '.claude', 'hooks', 'config.json');
+      const projectConfigPath = path.join(projectPath, '.claude', 'hooks', 'hookmanager', 'config.json');
       await fs.ensureDir(path.dirname(projectConfigPath));
       await fs.writeJson(projectConfigPath, {
         version: '1.0.0',
@@ -358,7 +358,7 @@ describe('ConfigManager', () => {
 
     it('should save project config if exists', async () => {
       // Add a project hook first
-      const projectConfigPath = path.join(projectPath, '.claude', 'hooks', 'config.json');
+      const projectConfigPath = path.join(projectPath, '.claude', 'hooks', 'hookmanager', 'config.json');
       await fs.ensureDir(path.dirname(projectConfigPath));
       await fs.writeJson(projectConfigPath, {
         version: '1.0.0',
@@ -392,7 +392,7 @@ describe('ConfigManager', () => {
         priority: 50,
       };
 
-      await configManager.addHook(hookConfig);
+      await configManager.addHook(hookConfig, true);
 
       const globalConfig = configManager.getGlobalConfig();
       expect(globalConfig?.hooks).toHaveLength(1);
@@ -408,7 +408,7 @@ describe('ConfigManager', () => {
         priority: 50,
       };
 
-      await configManager.addHook(hookConfig);
+      await configManager.addHook(hookConfig, true);
 
       const globalConfig = configManager.getGlobalConfig();
       expect(globalConfig?.hooks[0].id).toBeDefined();
@@ -434,7 +434,7 @@ describe('ConfigManager', () => {
         priority: 50,
       };
 
-      await configManager.addHook(hookConfig);
+      await configManager.addHook(hookConfig, true);
 
       const mergedConfig = configManager.getMergedConfig();
       expect(mergedConfig.hooks).toHaveLength(1);
@@ -455,24 +455,24 @@ describe('ConfigManager', () => {
         handler: { type: 'command', command: 'echo' },
         priority: 50,
       };
-      await configManager.addHook(hookConfig);
+      await configManager.addHook(hookConfig, true);
     });
 
     it('should remove a hook from global config', async () => {
-      await configManager.removeHook(hookId);
+      await configManager.removeHook(hookId, true);
 
       const globalConfig = configManager.getGlobalConfig();
       expect(globalConfig?.hooks).toHaveLength(0);
     });
 
     it('should throw error when hook not found', async () => {
-      await expect(configManager.removeHook('non-existent')).rejects.toThrow(
-        'Hook not found: non-existent'
+      await expect(configManager.removeHook('non-existent', true)).rejects.toThrow(
+        'Hook not found in global config: non-existent'
       );
     });
 
     it('should update merged config', async () => {
-      await configManager.removeHook(hookId);
+      await configManager.removeHook(hookId, true);
 
       const mergedConfig = configManager.getMergedConfig();
       expect(mergedConfig.hooks).toHaveLength(0);
@@ -493,14 +493,14 @@ describe('ConfigManager', () => {
         handler: { type: 'command', command: 'echo' },
         priority: 50,
       };
-      await configManager.addHook(hookConfig);
+      await configManager.addHook(hookConfig, true);
     });
 
     it('should update hook properties', async () => {
       await configManager.updateHook(hookId, {
         name: 'Updated Hook',
         priority: 100,
-      });
+      }, true);
 
       const globalConfig = configManager.getGlobalConfig();
       const hook = globalConfig?.hooks.find((h) => h.id === hookId);
@@ -510,8 +510,8 @@ describe('ConfigManager', () => {
 
     it('should throw error when hook not found', async () => {
       await expect(
-        configManager.updateHook('non-existent', { name: 'Updated' })
-      ).rejects.toThrow('Hook not found: non-existent');
+        configManager.updateHook('non-existent', { name: 'Updated' }, true)
+      ).rejects.toThrow('Hook not found in global config: non-existent');
     });
 
     it('should validate updated hook', async () => {
@@ -714,6 +714,7 @@ describe('ConfigManager', () => {
       if (globalConfig) {
         globalConfig.hooks.push({
           ...hookConfig,
+          handler: { type: 'command' as const, command: 'echo' },
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           exitCodeBlocking: [2],
@@ -745,6 +746,7 @@ describe('ConfigManager', () => {
       if (globalConfig) {
         globalConfig.hooks.push({
           ...hookConfig,
+          handler: { type: 'command' as const, command: 'echo' },
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           exitCodeBlocking: [2],

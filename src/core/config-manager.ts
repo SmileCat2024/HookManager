@@ -25,6 +25,7 @@ const HookConfigSchema = z.object({
   description: z.string().optional(),
   enabled: z.boolean(),
   events: z.array(z.string()).min(1),
+  matcher: z.string().optional(),
   handler: z.object({
     type: z.enum(['command', 'script', 'module', 'programmatic']),
     command: z.string().optional(),
@@ -216,7 +217,7 @@ export class ConfigManager {
    * Load project configuration
    */
   private async loadProjectConfig(): Promise<ProjectConfig | null> {
-    const projectHooksDir = path.join(this.projectPath, '.claude', 'hooks');
+    const projectHooksDir = path.join(this.projectPath, '.claude', 'hooks', 'hookmanager');
     const configPath = path.join(projectHooksDir, 'config.json');
 
     // Ensure the project hooks directory exists
@@ -302,7 +303,7 @@ export class ConfigManager {
 
       // Save project config
       if (this.projectConfig) {
-        const projectConfigPath = path.join(this.projectPath, '.claude', 'hooks', 'config.json');
+        const projectConfigPath = path.join(this.projectPath, '.claude', 'hooks', 'hookmanager', 'config.json');
         await fs.ensureDir(path.dirname(projectConfigPath));
         await fs.writeJson(projectConfigPath, this.projectConfig, { spaces: 2 });
         this.logger.debug(`Saved project config to ${projectConfigPath}`);
@@ -585,10 +586,11 @@ export class ConfigManager {
 
       // Check for common issues
       const config = this.getMergedConfig();
+      const allHooks = [...config.hooks, ...(config.projectHooks || [])];
 
       // Check for duplicate hook names
       const names = new Set<string>();
-      for (const hook of config.hooks) {
+      for (const hook of allHooks) {
         if (names.has(hook.name)) {
           errors.push(`Duplicate hook name: ${hook.name}`);
         }
@@ -596,14 +598,14 @@ export class ConfigManager {
       }
 
       // Check for hooks with no events
-      for (const hook of config.hooks) {
+      for (const hook of allHooks) {
         if (!hook.events || hook.events.length === 0) {
           errors.push(`Hook ${hook.name} has no events`);
         }
       }
 
       // Check for hooks with invalid priority
-      for (const hook of config.hooks) {
+      for (const hook of allHooks) {
         if (hook.priority < 0 || hook.priority > 1000) {
           warnings.push(`Hook ${hook.name} has invalid priority: ${hook.priority}`);
         }
@@ -611,7 +613,7 @@ export class ConfigManager {
 
       // Check for security issues
       if (config.security.validateCommands) {
-        for (const hook of config.hooks) {
+        for (const hook of allHooks) {
           if (hook.handler.type === 'command') {
             const command = hook.handler.command || '';
             if (command.includes('sudo') || command.includes('rm -rf')) {

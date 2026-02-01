@@ -23,18 +23,20 @@ hookmanager init --global
 ### 3. Add a Hook
 ```bash
 # Add to project configuration (default)
-hookmanager add security-audit pre-command "npm audit" \
+hookmanager add security-audit PreToolUse "npm audit" \
   --description "Run npm audit before package installation" \
   --filter-commands "npm install,npm ci" \
   --priority 100
 
 # Add to global configuration
-hookmanager add security-audit pre-command "npm audit" \
+hookmanager add security-audit PreToolUse "npm audit" \
   --description "Run npm audit before package installation" \
   --filter-commands "npm install,npm ci" \
   --priority 100 \
   --global
 ```
+
+**Note**: `PreToolUse` is the correct event name. Valid events include: SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, SubagentStart, SubagentStop, etc.
 
 ### 4. List Hooks
 ```bash
@@ -163,13 +165,13 @@ Execute JavaScript functions:
 HookManager supports both global and project-level hook configurations:
 
 ### Global Configuration
-Location: `~/.claude/hooks/config.json`
+Location: `~/.claude/hooks/hookmanager/config.json`
 - **Scope**: Works across all projects
 - **Access**: Use `--global` flag to access or modify
 - **Purpose**: Shared hooks for common workflows (security, backups, etc.)
 
 ### Project Configuration
-Location: `.claude/hooks/config.json`
+Location: `.claude/hooks/hookmanager/config.json`
 - **Scope**: Works only in the current project
 - **Access**: Default when no `--global` flag is used
 - **Purpose**: Project-specific hooks (linting, testing, deployment)
@@ -224,12 +226,12 @@ When both global and project hooks exist:
 ### Security Hooks
 ```bash
 # npm audit before package installation
-hookmanager add security-audit pre-command "npm audit" \
+hookmanager add security-audit PreToolUse "npm audit" \
   --filter-commands "npm install,npm ci" \
   --priority 100
 
 # Block dangerous commands
-hookmanager add block-dangerous pre-tool "node ./scripts/block.js" \
+hookmanager add block-dangerous PreToolUse "node ./scripts/block.js" \
   --filter-tools "bash,run" \
   --priority 1
 ```
@@ -237,12 +239,12 @@ hookmanager add block-dangerous pre-tool "node ./scripts/block.js" \
 ### Development Hooks
 ```bash
 # Lint before commits
-hookmanager add lint pre-command "npm run lint" \
+hookmanager add lint PreToolUse "npm run lint" \
   --filter-commands "git commit" \
   --priority 50
 
 # Test before commits
-hookmanager add test pre-command "npm test" \
+hookmanager add test PreToolUse "npm test" \
   --filter-commands "git commit" \
   --priority 60
 ```

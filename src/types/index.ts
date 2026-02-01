@@ -112,6 +112,7 @@ export interface HookConfig {
   description?: string;
   enabled: boolean;
   events: HookEvent[];
+  matcher?: string;
   handler: HookHandler;
   filter?: HookFilter;
   priority: number;

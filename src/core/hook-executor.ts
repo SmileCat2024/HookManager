@@ -191,6 +191,25 @@ export class HookExecutor {
       };
     }
 
+    // Check matcher
+    if (hook.matcher && !this.checkMatcher(hook.matcher, context)) {
+      this.logger.debug(`Hook ${hookName} matcher did not match, skipping`);
+      return {
+        hookId,
+        hookName,
+        event: context.event,
+        startTime: new Date().toISOString(),
+        endTime: new Date().toISOString(),
+        duration: 0,
+        result: {
+          success: true,
+          exitCode: 0,
+          stdout: 'Matcher did not match',
+        },
+        blocked: false,
+      };
+    }
+
     // Execute handler
     const timeout = options.timeout || hook.timeout || 30000;
     const maxRetries = options.retry !== undefined ? options.retry : hook.retry || 0;
@@ -512,6 +531,27 @@ export class HookExecutor {
         reject(error);
       }
     });
+  }
+
+  /**
+   * Check if matcher matches
+   */
+  private checkMatcher(matcher: string, context: HookContext): boolean {
+    if (matcher === '*' || matcher === '' || matcher === '.*') {
+      return true;
+    }
+
+    if (context.tool) {
+      try {
+        const regex = new RegExp(`^${matcher}$`);
+        return regex.test(context.tool);
+      } catch (error) {
+        // Fallback to exact string match if regex fails
+        return context.tool === matcher;
+      }
+    }
+
+    return false;
   }
 
   /**

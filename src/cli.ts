@@ -125,6 +125,24 @@ program
 
       await interceptor.initialize();
 
+      // Ensure project config exists if initializing project
+      if (!options.global) {
+        const configManager = interceptor.getConfigManager();
+        if (!configManager.getProjectConfig()) {
+          const projectConfigPath = path.join(projectPath, '.claude', 'hooks', 'hookmanager', 'config.json');
+          await fs.ensureDir(path.dirname(projectConfigPath));
+          await fs.writeJson(projectConfigPath, {
+            version: '1.0.0',
+            hooks: [],
+            metadata: {
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            }
+          }, { spaces: 2 });
+          await configManager.load();
+        }
+      }
+
       if (options.interactive) {
         spinner.stop();
         const answers = await inquirer.prompt([
@@ -162,10 +180,10 @@ program
       } else {
         spinner.succeed(`HookManager ${initType} configuration initialized`);
         if (options.global) {
-          console.log(chalk.gray(`  Global config: ~/.claude/hooks/config.json`));
+          console.log(chalk.gray(`  Global config: ~/.claude/hooks/hookmanager/config.json`));
           console.log(chalk.gray(`  Global settings: ~/.claude/settings.json`));
         } else {
-          console.log(chalk.gray(`  Project config: ${path.join(projectPath, '.claude', 'hooks', 'config.json')}`));
+          console.log(chalk.gray(`  Project config: ${path.join(projectPath, '.claude', 'hooks', 'hookmanager', 'config.json')}`));
           console.log(chalk.gray(`  Project settings: ${path.join(projectPath, '.claude', 'settings.json')}`));
         }
       }
@@ -255,7 +273,7 @@ program
         exitCodeBlocking,
       };
 
-      await interceptor.registerHook(hookConfig);
+      await interceptor.registerHook(hookConfig, options.global || false);
       await interceptor.destroy();
 
       if (json) {
@@ -343,6 +361,19 @@ program
       let hooks = options.global
         ? interceptor.getGlobalHooks()
         : interceptor.getProjectHooks();
+
+      // Check if project is initialized when listing project hooks
+      if (!options.global) {
+        const configManager = interceptor.getConfigManager();
+        const projectConfig = configManager.getProjectConfig();
+        
+        if (!projectConfig) {
+           spinner.stop();
+           console.log(chalk.yellow('Project not initialized.'));
+           console.log(chalk.gray('Run "hookmanager init" to initialize configuration.'));
+           return;
+        }
+      }
 
       // Filter by lifecycle
       if (lifecycle) {

@@ -619,7 +619,7 @@ describe('HookInterceptor', () => {
         handler: { type: 'command', command: 'echo' },
         priority: 50,
       };
-      await interceptor.registerHook(hookConfig);
+      await interceptor.registerHook(hookConfig, true);
     });
 
     it('should clear all hooks', async () => {
@@ -662,7 +662,7 @@ describe('HookInterceptor', () => {
         priority: 50,
       };
 
-      await interceptor.registerHook(hookConfig);
+      await interceptor.registerHook(hookConfig, true);
 
       const exported = await interceptor.exportConfig('json');
       const parsed = JSON.parse(exported);
