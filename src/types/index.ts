@@ -100,11 +100,20 @@ export interface HookHandlerProgrammatic {
   handler: (context: HookContext) => Promise<HookResult>;
 }
 
+export interface HookHandlerPrompt {
+  type: 'prompt';
+  prompt: string;
+  model?: string; // Default: 'haiku'
+  timeout?: number;
+  systemPrompt?: string;
+}
+
 export type HookHandler =
   | HookHandlerCommand
   | HookHandlerScript
   | HookHandlerModule
-  | HookHandlerProgrammatic;
+  | HookHandlerProgrammatic
+  | HookHandlerPrompt;
 
 export interface HookConfig {
   id: string;
@@ -198,6 +207,7 @@ export interface GlobalConfig {
     blockedCommands?: string[];
     sandboxMode: boolean;
   };
+  ai?: AIConfig;
   metadata: {
     createdAt: string;
     updatedAt: string;
@@ -217,6 +227,7 @@ export interface ProjectConfig {
     maxParallel?: number;
   };
   excludeGlobalHooks?: string[];
+  ai?: AIConfig;
   metadata: {
     createdAt: string;
     updatedAt: string;
@@ -395,6 +406,34 @@ export interface ExecutionResult {
 export interface BatchExecutionResult {
   results: ExecutionResult[];
   summary: ExecutionSummary;
+}
+
+// ============================================================================
+// AI Provider Types
+// ============================================================================
+
+export type AIProvider = 'anthropic' | 'openai';
+
+export interface AnthropicConfig {
+  apiKey?: string;
+  baseURL?: string;
+  maxTokens?: number;
+  temperature?: number;
+  model?: string;
+}
+
+export interface OpenAIConfig {
+  apiKey?: string;
+  baseURL?: string;
+  maxTokens?: number;
+  temperature?: number;
+  model?: string;
+}
+
+export interface AIConfig {
+  provider: AIProvider;
+  anthropic?: AnthropicConfig;
+  openai?: OpenAIConfig;
 }
 
 // ============================================================================

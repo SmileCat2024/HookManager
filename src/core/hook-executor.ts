@@ -2,8 +2,9 @@
  * HookExecutor - Executes hooks with proper error handling and logging
  */
 
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import * as path from 'path';
+import * as fs from 'fs';
 
 import {
   HookContext,
@@ -16,23 +17,82 @@ import {
   HookHandler,
   LogLevel,
   HookEvent,
+  AIConfig,
+  AnthropicConfig,
+  OpenAIConfig,
 } from '../types';
 
 import { HookRegistry } from './hook-registry';
 import { Logger } from '../logging/logger';
+import { ProviderManager } from './ai-provider/provider-manager';
+import { AIProviderType } from './ai-provider/types';
 
 export interface HookExecutorOptions {
   logger: Logger;
   registry: HookRegistry;
+  aiConfig?: AIConfig;
 }
 
 export class HookExecutor {
   private logger: Logger;
   private registry: HookRegistry;
+  private providerManager: ProviderManager | null = null;
 
   constructor(options: HookExecutorOptions) {
     this.logger = options.logger;
     this.registry = options.registry;
+    this.providerManager = this.initializeProviderManager(options.aiConfig);
+  }
+
+  /**
+   * Initialize ProviderManager from AI configuration
+   */
+  private initializeProviderManager(aiConfig?: AIConfig): ProviderManager | null {
+    if (!aiConfig) {
+      // Try to get API key from environment
+      const apiKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
+      if (!apiKey) {
+        this.logger.debug('No AI configuration provided, prompt handlers will require manual setup');
+        return null;
+      }
+
+      aiConfig = {
+        provider: 'anthropic',
+        anthropic: { apiKey },
+      };
+    }
+
+    try {
+      const manager = new ProviderManager({
+        defaultProvider: aiConfig.provider === 'openai' ? AIProviderType.OPENAI : AIProviderType.ANTHROPIC,
+      });
+
+      // Register Anthropic provider if configured
+      if (aiConfig.provider === 'anthropic' && aiConfig.anthropic) {
+        manager.registerProvider({
+          type: AIProviderType.ANTHROPIC,
+          apiKey: aiConfig.anthropic.apiKey || process.env.ANTHROPIC_API_KEY || '',
+          baseURL: aiConfig.anthropic.baseURL,
+        });
+        this.logger.debug('Anthropic provider registered');
+      }
+
+      // Register OpenAI provider if configured
+      if (aiConfig.provider === 'openai' && aiConfig.openai) {
+        manager.registerProvider({
+          type: AIProviderType.OPENAI,
+          apiKey: aiConfig.openai.apiKey || process.env.OPENAI_API_KEY || '',
+          baseURL: aiConfig.openai.baseURL,
+        });
+        this.logger.debug('OpenAI provider registered');
+      }
+
+      this.logger.info('ProviderManager initialized successfully');
+      return manager;
+    } catch (error) {
+      this.logger.warn('Failed to initialize ProviderManager', { error: (error as Error).message });
+      return null;
+    }
   }
 
   /**
@@ -310,6 +370,9 @@ export class HookExecutor {
       case 'programmatic':
         return this.executeProgrammatic(handler, context, timeout);
 
+      case 'prompt':
+        return this.executePrompt(handler, context, timeout);
+
       default:
         throw new Error(`Unknown handler type: ${(handler as any).type}`);
     }
@@ -531,6 +594,200 @@ export class HookExecutor {
         reject(error);
       }
     });
+  }
+
+  /**
+   * Execute a prompt handler - uses ProviderManager to make intelligent decisions
+   * Only supports decision-making events: PreToolUse, PostToolUse, PostToolUseFailure,
+   * PermissionRequest, UserPromptSubmit, SubagentStop
+   */
+  private async executePrompt(
+    handler: any,
+    context: HookContext,
+    timeout: number
+  ): Promise<HookResult> {
+    const decisionEvents = [
+      HookEvent.PreToolUse,
+      HookEvent.PostToolUse,
+      HookEvent.PostToolUseFailure,
+      HookEvent.PermissionRequest,
+      HookEvent.UserPromptSubmit,
+      HookEvent.SubagentStop,
+    ];
+
+    // Debug log file path
+    const debugLogPath = 'C:\\Users\\zty20\\Desktop\\prompt-debug.log';
+
+    // Helper function to write debug log
+    const writeDebugLog = (message: string, data?: any) => {
+      const timestamp = new Date().toISOString();
+      const logEntry = `[${timestamp}] ${message}${data ? '\n' + JSON.stringify(data, null, 2) : ''}\n\n`;
+      try {
+        fs.appendFileSync(debugLogPath, logEntry, 'utf-8');
+      } catch (err) {
+        // Ignore write errors
+      }
+    };
+
+    writeDebugLog('=== executePrompt START ===', { event: context.event });
+
+    // Check if event supports prompt-based decisions
+    if (!decisionEvents.includes(context.event)) {
+      writeDebugLog('Event not supported', { event: context.event });
+      this.logger.warn(`Event ${context.event} does not support prompt handler, skipping`, {
+        hookId: context.event,
+      });
+      return {
+        success: true,
+        exitCode: 0,
+        stdout: `Event ${context.event} does not support prompt decisions`,
+      };
+    }
+
+    // Check if ProviderManager is available
+    if (!this.providerManager) {
+      writeDebugLog('ProviderManager not available');
+      this.logger.warn(`ProviderManager not initialized, cannot execute prompt handler`, {
+        event: context.event,
+      });
+      // On failure, default to ok: true to allow operation to continue
+      return {
+        success: true,
+        exitCode: 0,
+        stdout: JSON.stringify({
+          decision: 'continue',
+          reason: 'ProviderManager not initialized',
+        }),
+        output: {
+          decision: 'continue',
+          reason: 'ProviderManager not initialized',
+        },
+      };
+    }
+
+    const model = handler.model || 'haiku';
+    const userPrompt = handler.prompt;
+    const systemPrompt = handler.systemPrompt || 'You are a decision assistant. Evaluate the given context and respond with a JSON decision.';
+
+    writeDebugLog('Handler config', { model, userPrompt: userPrompt.substring(0, 100) });
+
+    try {
+      // Build hook prompt context
+      const hookContext = {
+        event: context.event,
+        timestamp: context.timestamp,
+        sessionId: context.sessionId,
+        userId: context.userId,
+        projectId: context.projectId,
+        tool: context.tool,
+        command: context.command,
+        input: context.input,
+        output: context.output,
+        metadata: context.metadata,
+        environment: context.environment,
+        projectDir: context.projectDir,
+        pluginRoot: context.pluginRoot,
+        envFile: context.envFile,
+      };
+
+      this.logger.debug(`Executing prompt handler with ProviderManager`, {
+        model,
+        event: context.event,
+      });
+
+      // Execute via ProviderManager
+      const startTime = Date.now();
+      writeDebugLog('Executing with ProviderManager...');
+
+      const result = await this.providerManager.executeHookPrompt(
+        hookContext,
+        userPrompt,
+        model,
+        systemPrompt
+      );
+
+      const duration = Date.now() - startTime;
+      writeDebugLog('ProviderManager response received', { duration, result });
+
+      this.logger.debug(`ProviderManager response received`, { duration });
+
+      const ok = result.ok ?? true;
+      const reason = result.reason || '';
+
+      writeDebugLog('Decision made', { ok, reason });
+
+      // Map decision to event-specific output format
+      // Based on: https://code.claude.com/docs/en/hooks
+      let hookResult: HookResult;
+
+      if (context.event === HookEvent.PreToolUse || context.event === HookEvent.PermissionRequest) {
+        // These events use hookSpecificOutput.permissionDecision format
+        hookResult = {
+          success: true,
+          exitCode: 0,
+          stdout: JSON.stringify({
+            hookSpecificOutput: {
+              permissionDecision: ok ? 'allow' : 'deny',
+              permissionDecisionReason: reason,
+            },
+          }),
+          output: {
+            hookSpecificOutput: {
+              permissionDecision: ok ? 'allow' : 'deny',
+              permissionDecisionReason: reason,
+            },
+          },
+        };
+      } else {
+        // Other decision events use decision format
+        hookResult = {
+          success: true,
+          exitCode: ok ? 0 : 2, // Exit code 2 signals blocking
+          stdout: JSON.stringify({
+            decision: ok ? 'continue' : 'block',
+            reason: reason,
+          }),
+          output: {
+            decision: ok ? 'continue' : 'block',
+            reason: reason,
+          },
+        };
+      }
+
+      writeDebugLog('Result', { ok, reason, exitCode: hookResult.exitCode });
+
+      this.logger.info(`Prompt handler executed`, {
+        event: context.event,
+        decision: ok ? 'allow' : 'deny',
+        reason: reason.substring(0, 100),
+      });
+
+      return hookResult;
+    } catch (error) {
+      const errorMessage = (error as Error).message;
+      const errorStack = (error as Error).stack;
+
+      writeDebugLog('ERROR', { errorMessage, errorStack: errorStack?.substring(0, 500) });
+
+      this.logger.error(`Prompt handler execution failed`, {
+        error: errorMessage,
+        event: context.event,
+      });
+
+      // On failure, default to ok: true to allow operation to continue
+      return {
+        success: true,
+        exitCode: 0,
+        stdout: JSON.stringify({
+          decision: 'continue',
+          reason: `Prompt handler failed: ${errorMessage.substring(0, 100)}`,
+        }),
+        output: {
+          decision: 'continue',
+          reason: `Prompt handler failed: ${errorMessage.substring(0, 100)}`,
+        },
+      };
+    }
   }
 
   /**

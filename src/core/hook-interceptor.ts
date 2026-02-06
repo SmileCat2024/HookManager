@@ -33,7 +33,7 @@ export interface HookInterceptorOptions {
 export class HookInterceptor {
   private registry: HookRegistry;
   private configManager: ConfigManager;
-  private executor: HookExecutor;
+  private executor: HookExecutor | null = null;
   private logger: Logger;
   private initialized = false;
   private options: Required<HookInterceptorOptions>;
@@ -61,11 +61,6 @@ export class HookInterceptor {
 
     this.registry = new HookRegistry({
       logger: this.logger,
-    });
-
-    this.executor = new HookExecutor({
-      logger: this.logger,
-      registry: this.registry,
     });
 
     if (this.options.autoInitialize) {
@@ -126,6 +121,18 @@ export class HookInterceptor {
       await this.logger.initialize();
       this.logger.debug('Logger initialized');
 
+      // Initialize executor with AI config from merged config
+      const aiConfig = config.ai;
+      this.executor = new HookExecutor({
+        logger: this.logger,
+        registry: this.registry,
+        aiConfig,
+      });
+      this.logger.debug('HookExecutor initialized', {
+        hasAIConfig: !!aiConfig,
+        provider: aiConfig?.provider,
+      });
+
       this.initialized = true;
       this.logger.info('HookInterceptor initialized successfully');
     } catch (error) {
@@ -145,6 +152,10 @@ export class HookInterceptor {
   ): Promise<BatchExecutionResult> {
     if (!this.initialized) {
       await this.initialize();
+    }
+
+    if (!this.executor) {
+      throw new Error('HookExecutor not initialized');
     }
 
     const startTime = Date.now();

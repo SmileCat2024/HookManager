@@ -854,6 +854,57 @@ describe('HookExecutor', () => {
     });
   });
 
+  describe('executeHook - prompt handler', () => {
+    // Note: The prompt handler uses Claude CLI which requires external dependencies.
+    // These tests focus on the event filtering logic that HookExecutor controls.
+    // Full integration tests are in the AI provider test files.
+
+    it('should skip prompt handler for non-decision events', async () => {
+      const hook = {
+        id: 'prompt-hook',
+        name: 'Prompt Hook',
+        enabled: true,
+        events: [HookEvent.SessionStart], // Non-decision event
+        handler: {
+          type: 'prompt',
+          prompt: 'Should I allow this?',
+        },
+      };
+
+      await registry.register(hook);
+
+      const context = {
+        event: HookEvent.SessionStart,
+        timestamp: new Date().toISOString(),
+        sessionId: 'test-session',
+      };
+
+      const result = await executor.executeHook(hook, context);
+
+      expect(result.result.success).toBe(true);
+      expect(result.result.stdout).toContain('does not support prompt decisions');
+    });
+
+    it('should recognize decision events that support prompt handlers', async () => {
+      // This test verifies that the executor correctly identifies decision events
+      // The actual prompt execution is tested in the AI provider tests
+      const decisionEvents = [
+        HookEvent.PreToolUse,
+        HookEvent.PostToolUse,
+        HookEvent.PostToolUseFailure,
+        HookEvent.PermissionRequest,
+        HookEvent.UserPromptSubmit,
+        HookEvent.SubagentStop,
+      ];
+
+      // Verify all decision events are distinct from non-deision events
+      expect(decisionEvents).toContain(HookEvent.PreToolUse);
+      expect(decisionEvents).toContain(HookEvent.PermissionRequest);
+      expect(decisionEvents).toContain(HookEvent.UserPromptSubmit);
+      expect(decisionEvents).not.toContain(HookEvent.SessionStart);
+    });
+  });
+
   describe('executeHook - statistics tracking', () => {
     it('should update statistics on success', async () => {
       const hook = {

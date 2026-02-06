@@ -14,11 +14,39 @@ import {
   HookConfig,
   ConfigError,
   LogLevel,
+  AIProvider,
+  AnthropicConfig,
+  OpenAIConfig,
+  AIConfig,
 } from '../types';
 
 import { Logger } from '../logging/logger';
 
 // Zod schemas for validation
+
+// AI Configuration Schemas
+const AnthropicConfigSchema = z.object({
+  apiKey: z.string().optional(),
+  baseURL: z.string().optional(),
+  maxTokens: z.number().min(1).max(200000).optional(),
+  temperature: z.number().min(0).max(1).optional(),
+  model: z.string().optional(),
+});
+
+const OpenAIConfigSchema = z.object({
+  apiKey: z.string().optional(),
+  baseURL: z.string().optional(),
+  maxTokens: z.number().min(1).max(200000).optional(),
+  temperature: z.number().min(0).max(2).optional(),
+  model: z.string().optional(),
+});
+
+const AIConfigSchema = z.object({
+  provider: z.enum(['anthropic', 'openai']),
+  anthropic: AnthropicConfigSchema.optional(),
+  openai: OpenAIConfigSchema.optional(),
+});
+
 const HookConfigSchema = z.object({
   id: z.string(),
   name: z.string().min(1).max(100),
@@ -27,7 +55,7 @@ const HookConfigSchema = z.object({
   events: z.array(z.string()).min(1),
   matcher: z.string().optional(),
   handler: z.object({
-    type: z.enum(['command', 'script', 'module', 'programmatic']),
+    type: z.enum(['command', 'script', 'module', 'programmatic', 'prompt']),
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     shell: z.string().optional(),
@@ -37,6 +65,9 @@ const HookConfigSchema = z.object({
     module: z.string().optional(),
     function: z.string().optional(),
     handler: z.function().optional(),
+    prompt: z.string().optional(),
+    model: z.string().optional(),
+    systemPrompt: z.string().optional(),
     timeout: z.number().optional(),
     retry: z.number().optional(),
   }),
@@ -81,6 +112,7 @@ const GlobalConfigSchema = z.object({
     blockedCommands: z.array(z.string()).optional(),
     sandboxMode: z.boolean(),
   }),
+  ai: AIConfigSchema.optional(),
   metadata: z.object({
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
@@ -100,6 +132,7 @@ const ProjectConfigSchema = z.object({
     maxParallel: z.number().optional(),
   }).optional(),
   excludeGlobalHooks: z.array(z.string()).optional(),
+  ai: AIConfigSchema.optional(),
   metadata: z.object({
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
@@ -200,6 +233,19 @@ export class ConfigManager {
         blockedCommands: ['rm -rf', 'del /f', 'sudo'],
         sandboxMode: false,
       },
+      ai: {
+        provider: 'anthropic',
+        anthropic: {
+          maxTokens: 4096,
+          temperature: 0.7,
+          model: 'claude-3-haiku-20240307',
+        },
+        openai: {
+          maxTokens: 4096,
+          temperature: 0.7,
+          model: 'gpt-4o-mini',
+        },
+      },
       metadata: {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -274,6 +320,14 @@ export class ConfigManager {
       if (this.projectConfig.logPath) {
         merged.logPath = this.projectConfig.logPath;
       }
+
+      // Override AI config if specified
+      if (this.projectConfig.ai) {
+        merged.ai = {
+          ...merged.ai,
+          ...this.projectConfig.ai,
+        };
+      }
     }
 
     // Filter out excluded hooks
@@ -343,6 +397,19 @@ export class ConfigManager {
         this.projectConfig = {
           version: '1.0.0',
           hooks: [],
+          ai: {
+            provider: 'anthropic',
+            anthropic: {
+              maxTokens: 4096,
+              temperature: 0.7,
+              model: 'claude-3-haiku-20240307',
+            },
+            openai: {
+              maxTokens: 4096,
+              temperature: 0.7,
+              model: 'gpt-4o-mini',
+            },
+          },
           metadata: {
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),

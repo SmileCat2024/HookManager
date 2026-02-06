@@ -42,6 +42,7 @@ interface InitOptions {
 }
 
 interface AddHookOptions {
+  type?: string;
   description?: string;
   priority?: string;
   filterTools?: string;
@@ -204,7 +205,8 @@ program
 program
   .command('add <name> <lifecycle>')
   .description('Add a new hook')
-  .argument('<command>', 'Command or script to execute')
+  .argument('<command>', 'Command, script, or prompt to execute')
+  .option('--type <type>', 'Handler type (command, script, module, prompt)', 'command')
   .option('--description <text>', 'Hook description')
   .option('--priority <number>', 'Execution priority (0-1000)', '50')
   .option('--filter-tools <tools>', 'Filter by tools (comma-separated)')
@@ -255,18 +257,39 @@ program
             .filter((c: number) => !isNaN(c))
         : [2];
 
+      // Validate handler type
+      const validTypes = ['command', 'script', 'module', 'prompt'];
+      const handlerType = options.type || 'command';
+      if (!validTypes.includes(handlerType)) {
+        throw new Error(`Invalid handler type: ${handlerType}. Valid types: ${validTypes.join(', ')}`);
+      }
+
+      // Build handler based on type
+      let handler: any;
+      if (handlerType === 'prompt') {
+        // Prompt handler - the command argument is the prompt template
+        handler = {
+          type: 'prompt' as const,
+          prompt: command,
+          timeout: parseInt(options.timeout, 10),
+        };
+      } else {
+        // Command/script/module handler
+        handler = {
+          type: handlerType as 'command' | 'script' | 'module',
+          ...(handlerType === 'command' || handlerType === 'script' ? { command } : { module: command }),
+          timeout: parseInt(options.timeout, 10),
+          retry: parseInt(options.retry, 10),
+        };
+      }
+
       const hookConfig: Partial<HookConfig> = {
         id: name,
         name,
         description: options.description || '',
         enabled: true,
         events: [lifecycle as HookEvent],
-        handler: {
-          type: 'command' as const,
-          command,
-          timeout: parseInt(options.timeout, 10),
-          retry: parseInt(options.retry, 10),
-        },
+        handler,
         filter: Object.keys(filter).length > 0 ? filter : undefined,
         priority: parseInt(options.priority, 10),
         continueOnError: options.continueOnError,
@@ -280,8 +303,13 @@ program
         console.log(JSON.stringify({ success: true, hook: hookConfig }, null, 2));
       } else {
         spinner.succeed(`Hook "${name}" added successfully`);
+        console.log(chalk.gray(`  Type: ${handlerType}`));
         console.log(chalk.gray(`  Lifecycle: ${lifecycle}`));
-        console.log(chalk.gray(`  Command: ${command}`));
+        if (handlerType === 'prompt') {
+          console.log(chalk.gray(`  Prompt: ${command.substring(0, 80)}${command.length > 80 ? '...' : ''}`));
+        } else {
+          console.log(chalk.gray(`  Command: ${command}`));
+        }
         console.log(chalk.gray(`  Priority: ${options.priority}`));
       }
     } catch (error) {
@@ -942,8 +970,35 @@ program
         sessionId: options.sessionId,
       };
 
-      // Parse input if provided
-      if (options.input) {
+      // Read stdin for JSON input (UserPromptSubmit hook provides data via stdin)
+      let stdinData = '';
+      if (process.stdin.isTTY) {
+        // No stdin data, use command line arguments
+      } else {
+        // Read from stdin
+        for await (const chunk of process.stdin) {
+          stdinData += chunk.toString();
+        }
+        // Try to parse stdin as JSON
+        if (stdinData.trim()) {
+          try {
+            const stdinJson = JSON.parse(stdinData);
+            // Extract prompt field for UserPromptSubmit
+            if (stdinJson.prompt !== undefined) {
+              eventContext.input = stdinJson.prompt;
+            }
+            // Store other fields for potential use
+            if (stdinJson.session_id) eventContext.sessionId = stdinJson.session_id;
+            if (stdinJson.cwd) eventContext.projectDir = stdinJson.cwd;
+          } catch {
+            // Not valid JSON, use as raw input
+            eventContext.input = stdinData;
+          }
+        }
+      }
+
+      // Parse input if provided via --input option
+      if (options.input && !eventContext.input) {
         try {
           eventContext.input = JSON.parse(options.input);
         } catch {
@@ -951,8 +1006,8 @@ program
         }
       }
 
-      // Add prompt if provided
-      if (options.prompt) {
+      // Add prompt if provided via --prompt option
+      if (options.prompt && !eventContext.input) {
         eventContext.input = options.prompt;
       }
 
@@ -964,8 +1019,29 @@ program
 
       await interceptor.destroy();
 
+      // Output result (always output for debugging)
       if (program.opts().json) {
         console.log(JSON.stringify(result, null, 2));
+      } else {
+        // Check if any hook blocked execution
+        if (result.summary.blocked > 0) {
+          console.error(JSON.stringify({
+            success: false,
+            blocked: true,
+            message: 'Operation blocked by hook',
+            result
+          }));
+          // Exit with code 2 to signal blocking
+          process.exit(2);
+        } else {
+          if (result.summary.total > 0) {
+            console.log(JSON.stringify({
+              success: true,
+              message: 'Hooks executed successfully',
+              result
+            }, null, 2));
+          }
+        }
       }
     } catch (error) {
       console.error(JSON.stringify({
@@ -1007,9 +1083,15 @@ program
     console.log('  --log-level <level>   Log level (debug, info, warn, error, silent)');
     console.log('  --json                Output as JSON');
     console.log('  --verbose             Verbose output\n');
+    console.log('Handler Types:');
+    console.log('  command               Execute a shell command');
+    console.log('  script                Execute a script file');
+    console.log('  module               Load and execute a Node.js module');
+    console.log('  prompt               Use Claude AI to make intelligent decisions\n');
     console.log('Examples:');
     console.log('  hookmanager init');
-    console.log('  hookmanager add security-audit pre-command "npm audit"');
+    console.log('  hookmanager add security-audit PreToolUse "npm audit" --type command');
+    console.log('  hookmanager add ai-decision PreToolUse "Should I allow this tool? Context: $ARGUMENTS" --type prompt');
     console.log('  hookmanager list');
     console.log('  hookmanager logs --tail 20');
     console.log('  hookmanager config --validate');
