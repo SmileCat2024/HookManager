@@ -4,56 +4,73 @@
  */
 
 // ============================================================================
-// Lifecycle Events (27 events based on Claude Code documentation)
+// Lifecycle Events (15 events based on Claude Code official documentation)
 // ============================================================================
 
+/**
+ * HookEvent - All supported Claude Code lifecycle events
+ *
+ * Based on official Claude Code documentation:
+ * https://code.claude.com/docs/en/hooks
+ *
+ * Event Categories:
+ * - Session: Session lifecycle
+ * - Prompt: User input handling
+ * - Tool: Tool execution
+ * - Permission: Permission requests
+ * - Agent: Subagent management
+ * - Context: Context management
+ * - Task: Task completion
+ * - Team: Agent team coordination
+ */
 export enum HookEvent {
-  // Session Events
+  // Session Events (2)
+  /** When a session begins or resumes */
   SessionStart = 'SessionStart',
+  /** When a session terminates */
   SessionEnd = 'SessionEnd',
-  SessionResume = 'SessionResume',
 
-  // Prompt Events
+  // Prompt Events (1)
+  /** When you submit a prompt, before Claude processes it */
   UserPromptSubmit = 'UserPromptSubmit',
-  UserPromptEdit = 'UserPromptEdit',
 
-  // Tool Events
+  // Tool Events (3)
+  /** Before a tool call executes. Can block it */
   PreToolUse = 'PreToolUse',
+  /** After a tool call succeeds */
   PostToolUse = 'PostToolUse',
+  /** After a tool call fails */
   PostToolUseFailure = 'PostToolUseFailure',
-  ToolPermissionRequest = 'ToolPermissionRequest',
 
-  // Agent Events
-  SubagentStart = 'SubagentStart',
-  SubagentStop = 'SubagentStop',
-  SubagentSpawn = 'SubagentSpawn',
-
-  // Response Events
-  ResponseStart = 'ResponseStart',
-  ResponseEnd = 'ResponseEnd',
-  ResponseChunk = 'ResponseChunk',
-
-  // Context Events
-  ContextCompact = 'ContextCompact',
-  ContextExpand = 'ContextExpand',
-  ContextTruncate = 'ContextTruncate',
-
-  // Permission Events
+  // Permission Events (1)
+  /** When a permission dialog appears */
   PermissionRequest = 'PermissionRequest',
-  PermissionGranted = 'PermissionGranted',
-  PermissionDenied = 'PermissionDenied',
 
-  // Notification Events
+  // Notification Events (1)
+  /** When Claude Code sends a notification */
   Notification = 'Notification',
-  Alert = 'Alert',
-  Warning = 'Warning',
 
-  // Error Events
-  Error = 'Error',
-  Exception = 'Exception',
+  // Agent Events (2)
+  /** When a subagent is spawned */
+  SubagentStart = 'SubagentStart',
+  /** When a subagent finishes */
+  SubagentStop = 'SubagentStop',
 
-  // Custom Events
-  Custom = 'Custom',
+  // Context Events (1)
+  /** Before context compaction */
+  PreCompact = 'PreCompact',
+
+  // Response Events (1)
+  /** When Claude finishes responding */
+  Stop = 'Stop',
+
+  // Team Events (1)
+  /** When an agent team teammate is about to go idle */
+  TeammateIdle = 'TeammateIdle',
+
+  // Task Events (1)
+  /** When a task is being marked as completed */
+  TaskCompleted = 'TaskCompleted',
 }
 
 // ============================================================================

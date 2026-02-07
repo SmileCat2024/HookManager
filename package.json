@@ -1,6 +1,6 @@
 {
   "name": "@smilecat2026/hook-manager",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Universal hook manager for Claude Code - manage all lifecycle hooks via CLI",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

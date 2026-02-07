@@ -36,7 +36,7 @@ hookmanager add security-audit PreToolUse "npm audit" \
   --global
 ```
 
-**Note**: `PreToolUse` is the correct event name. Valid events include: SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, SubagentStart, SubagentStop, etc.
+**Note**: The `--type` flag supports `command` (default) and `prompt` for AI-powered hooks.
 
 ### 4. List Hooks
 ```bash
@@ -56,7 +56,31 @@ hookmanager list --global
 hookmanager logs --tail 20
 ```
 
-### 6. Uninstall
+### 6. Manage Hooks by Name or ID
+```bash
+# List hooks to see both ID and name
+hookmanager list
+# Output:
+# ✓ security-audit
+#   ID: hook-1707123456789-abc123
+#   Scope: project
+#   Lifecycle: PreToolUse
+#   ...
+
+# Disable by name (affects all scopes - global and project)
+hookmanager disable security-audit
+
+# Or disable by unique ID (more precise)
+hookmanager disable hook-1707123456789-abc123
+
+# Enable by name
+hookmanager enable security-audit
+
+# Remove by name (removes from all scopes)
+hookmanager remove security-audit
+```
+
+### 7. Uninstall
 ```bash
 # Remove from project configuration (default)
 hookmanager uninstall
@@ -103,7 +127,33 @@ ProviderManager
 └── OpenAIProvider (planned)
 ```
 
-### Data Flow for Prompt Hooks
+### Data Flow for All Hooks
+
+```
+Claude Code Event
+    ↓
+settings.json → hookmanager intercept --event <EventType>
+    ↓
+stdin JSON (All events pass data via stdin)
+  {
+    "hook_event_name": "PreToolUse",
+    "tool": "Bash",
+    "command": "npm install",
+    "input": {...},
+    "session_id": "...",
+    "cwd": "..."
+  }
+    ↓
+HookInterceptor → Parse stdin JSON, extract all fields
+    ↓
+HookExecutor → Apply matcher → Apply filter → Execute handler
+    ↓
+Return result to Claude Code
+```
+
+**Important**: All Claude Code events pass their data through stdin JSON. The `intercept` command parses this JSON to extract event-specific fields like `tool`, `command`, `input`, `metadata`, etc.
+
+### Data Flow for Prompt Handlers (AI Decision Hooks)
 
 ```
 User Input
@@ -130,7 +180,7 @@ Return to Claude Code → Continue or Block operation
 ## Hook Types
 
 ### Command Handler
-Execute shell commands:
+Execute shell commands or scripts:
 ```json
 {
   "type": "command",
@@ -139,32 +189,11 @@ Execute shell commands:
 }
 ```
 
-### Script Handler
-Execute script files:
+**External scripts** can also be executed via command type:
 ```json
 {
-  "type": "script",
-  "path": "./scripts/backup.sh",
-  "timeout": 60000
-}
-```
-
-### Module Handler
-Execute Node.js modules:
-```json
-{
-  "type": "module",
-  "module": "./custom-handler.js",
-  "function": "myHandler"
-}
-```
-
-### Programmatic Handler
-Execute JavaScript functions:
-```json
-{
-  "type": "programmatic",
-  "handler": "(context) => { return { success: true, exitCode: 0 }; }"
+  "type": "command",
+  "command": "node ./scripts/my-handler.js"
 }
 ```
 
@@ -386,16 +415,43 @@ PROMPT="test input" npx hookmanager intercept --event UserPromptSubmit --json
 
 ## Lifecycle Events
 
-- SessionStart, SessionEnd, SessionResume
-- UserPromptSubmit, UserPromptEdit
-- PreToolUse, PostToolUse, PostToolUseFailure
-- SubagentStart, SubagentStop, SubagentSpawn
-- ResponseStart, ResponseEnd, ResponseChunk
-- ContextCompact, ContextExpand, ContextTruncate
-- PermissionRequest, PermissionGranted, PermissionDenied
-- Notification, Alert, Warning
-- Error, Exception
-- Custom
+HookManager supports 15 lifecycle events from Claude Code:
+
+### Session Events
+- `SessionStart` - When a session begins or resumes
+- `SessionEnd` - When a session terminates
+
+### User Interaction
+- `UserPromptSubmit` - When you submit a prompt, before Claude processes it
+
+### Tool Events
+- `PreToolUse` - Before a tool call executes (can block it)
+- `PostToolUse` - After a tool call succeeds
+- `PostToolUseFailure` - After a tool call fails
+
+### Permission Events
+- `PermissionRequest` - When a permission dialog appears
+
+### Agent Events
+- `SubagentStart` - When a subagent is spawned
+- `SubagentStop` - When a subagent finishes
+
+### Context Events
+- `PreCompact` - Before context compaction
+
+### Response Events
+- `Stop` - When Claude finishes responding
+
+### Notification Events
+- `Notification` - When Claude Code sends a notification
+
+### Team Events
+- `TeammateIdle` - When an agent team teammate is about to go idle
+
+### Task Events
+- `TaskCompleted` - When a task is being marked as completed
+
+For detailed event documentation, see [docs/events.md](docs/events.md)
 
 ## CLI Commands
 
@@ -403,10 +459,10 @@ PROMPT="test input" npx hookmanager intercept --event UserPromptSubmit --json
 |---------|-------------|
 | `init` | Initialize HookManager |
 | `add` | Add a new hook |
-| `remove` | Remove a hook |
-| `list` | List hooks |
-| `enable` | Enable a hook (use `--global` for global hooks) |
-| `disable` | Disable a hook (use `--global` for global hooks) |
+| `remove <id-or-name>` | Remove a hook (supports both ID and name, affects all scopes) |
+| `list` | List hooks (use `--global` for global hooks only) |
+| `enable <id-or-name>` | Enable a hook (supports both ID and name, affects all scopes) |
+| `disable <id-or-name>` | Disable a hook (supports both ID and name, affects all scopes) |
 | `order` | Change hook order (use `--global` for global hooks) |
 | `logs` | View and manage logs |
 | `config` | Manage configuration |
@@ -415,6 +471,12 @@ PROMPT="test input" npx hookmanager intercept --event UserPromptSubmit --json
 | `validate` | Validate configuration |
 | `stats` | Show execution statistics |
 | `help` | Show detailed help |
+
+**Note on Hook Identification**:
+- Each hook now has a unique ID (format: `hook-<timestamp>-<random>`) that is separate from its name
+- `enable`, `disable`, and `remove` commands accept either the hook ID or hook name
+- These commands operate on **all scopes** (both global and project) when a name is provided
+- Use `list` to see both the ID and name of your hooks
 
 ## Configuration
 
@@ -441,17 +503,64 @@ When both global and project hooks exist:
 
 **Use `--global` flag** to specify which scope you want to operate on for all commands.
 
-### Example Configuration
+### Matcher and Filter
+
+HookManager provides two levels of filtering for hooks:
+
+#### Matcher (Coarse-Grained, Event-Specific)
+
+The `matcher` field performs coarse-grained filtering based on the event type. Different events have different matcher targets:
+
+| Event Type | Matcher Target | Example Values |
+|------------|----------------|----------------|
+| **Tool Events** (PreToolUse, PostToolUse, etc.) | Tool name | `"Bash"`, `"Write\|Edit"`, `"mcp__.*"` |
+| **SessionStart** | `metadata.source` | `"startup"`, `"resume"`, `"startup\|resume"` |
+| **SessionEnd** | `metadata.reason` | `"clear"`, `"logout"`, `"other"` |
+| **SubagentStart/Stop** | `metadata.agent_type` | `"Bash"`, `"Explore"`, `"Code"` |
+| **Notification** | `metadata.type` | `"permission_prompt"`, `"idle_prompt"` |
+| **PreCompact** | `metadata.trigger` | `"manual"`, `"auto"` |
+| **UserPromptSubmit** | Not supported | - |
+| **PermissionRequest** | Not supported | - |
+| **Stop** | Not supported | - |
+| **TeammateIdle** | Not supported | - |
+| **TaskCompleted** | Not supported | - |
+
+**Execution Order:** Matcher is checked **first** (coarse-grained), then Filter (fine-grained).
+
+**Wildcard Patterns:**
+- `*` or `.*` - Match everything
+- Empty string `""` - Match everything
+- `"Bash\|Write"` - Match Bash or Write
+- `"mcp__.*"` - Match all MCP tools
+
+#### Filter (Fine-Grained, Generic)
+
+The `filter` field performs fine-grained filtering independent of event type:
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `tools` | Exact tool name match | `["Bash", "Write"]` |
+| `commands` | Substring match in command | `["npm install", "git commit"]` |
+| `patterns` | Match against input arguments | `[".ts", ".js"]` |
+
+**CLI Parameters:**
+- `--matcher <pattern>` - Set matcher pattern
+- `--filter-tools <tools>` - Comma-separated tool names
+- `--filter-commands <cmds>` - Comma-separated command patterns
+- `--filter-patterns <pats>` - Comma-separated argument patterns
+
+#### Example Configuration
 ```json
 {
   "version": "1.0.0",
   "hooks": [
     {
-      "id": "hook-123",
+      "id": "hook-1707123456789-abc123",
       "name": "security-audit",
       "description": "Run npm audit",
       "enabled": true,
       "events": ["PreToolUse"],
+      "matcher": "Bash",
       "handler": {
         "type": "command",
         "command": "npm audit"
@@ -460,7 +569,12 @@ When both global and project hooks exist:
         "tools": ["bash"],
         "commands": ["npm install"]
       },
-      "priority": 100
+      "priority": 100,
+      "createdAt": "2024-02-05T12:00:00.000Z",
+      "updatedAt": "2024-02-05T12:00:00.000Z",
+      "metadata": {
+        "_scope": "project"
+      }
     }
   ],
   "logLevel": "info",
@@ -561,43 +675,98 @@ For prompt handlers to work, you must configure AI provider credentials in the *
 
 ## Examples
 
-### Security Hooks
+### Using Matchers (Coarse-Grained Filtering)
 ```bash
-# npm audit before package installation
-hookmanager add security-audit PreToolUse "npm audit" \
-  --filter-commands "npm install,npm ci" \
-  --priority 100
+# Filter for Bash tool operations
+hookmanager add bash-audit PreToolUse "npm audit" \
+  --matcher "Bash"
 
-# AI-powered security evaluation for file operations
-hookmanager add ai-security PreToolUse \
-  "Should I allow this file operation? Context: $ARGUMENTS" \
-  --type prompt \
-  --filter-tools "Write,Edit" \
-  --priority 100
+# Filter for multiple tools using regex
+hookmanager add file-check PreToolUse "echo 'Checking file operation'" \
+  --matcher "Write|Edit|MultiEdit"
 
-# Block dangerous commands
-hookmanager add block-dangerous PreToolUse "node ./scripts/block.js" \
-  --filter-tools "bash,run" \
-  --priority 1
+# Filter all MCP tools
+hookmanager add mcp-guard PreToolUse "node ./scripts/validate-mcp.js" \
+  --matcher "mcp__.*" \
+  --priority 100
 ```
 
-### Development Hooks
+### Using Filters (Fine-Grained Filtering)
 ```bash
-# Lint before commits
-hookmanager add lint PreToolUse "npm run lint" \
-  --filter-commands "git commit" \
-  --priority 50
+# Filter by specific commands (substring match)
+hookmanager add npm-security PreToolUse "npm audit" \
+  --filter-commands "npm install,npm ci"
 
-# Test before commits
-hookmanager add test PreToolUse "npm test" \
-  --filter-commands "git commit" \
-  --priority 60
+# Filter by specific tool names (exact match)
+hookmanager add file-audit PostToolUse "node ./scripts/audit.js" \
+  --filter-tools "Write,Edit"
 
-# AI evaluates if user prompts are safe/appropriate
-hookmanager add ai-user-filter UserPromptSubmit \
-  "Is this user request appropriate and safe? Context: $ARGUMENTS" \
+# Combine with patterns for argument matching
+hookmanager add typescript-check PreToolUse "npx tsc --noEmit" \
+  --filter-tools "Edit,Write" \
+  --filter-patterns ".ts,.tsx"
+```
+
+### Combining Matchers and Filters
+```bash
+# Coarse filter by matcher, then fine filter by specific tool
+hookmanager add mcp-spawn-guard PreToolUse "validate-spawn" \
+  --matcher "mcp__.*" \
+  --filter-tools "mcp__claude-flow__agent_spawn,mcp__claude-flow__agent_terminate"
+
+# Match Bash tool, filter specific commands
+hookmanager add git-hook PreToolUse "npm run lint" \
+  --matcher "Bash" \
+  --filter-commands "git commit"
+
+# Match file tools, filter by file extensions
+hookmanager add code-review PreToolUse "npx eslint" \
+  --matcher "Write|Edit" \
+  --filter-patterns ".ts,.js,.tsx,.jsx"
+```
+
+### AI Decision Hooks
+```bash
+# Content moderation (profanity filter)
+hookmanager add profanity-filter UserPromptSubmit \
+  "检查以下用户输入是否包含不适当的语言、脏话或冒犯性内容。如果有，请拒绝。返回JSON格式：{\"ok\": true/false, \"reason\": \"原因\"}" \
   --type prompt \
-  --model haiku
+  --description "检测用户输入中的脏话并拦截" \
+  --global
+
+# Security evaluation for file operations
+hookmanager add file-security PreToolUse \
+  "Evaluate if this file operation is safe. Consider: path traversal, sensitive files, destructive operations. Context: $ARGUMENTS" \
+  --type prompt \
+  --matcher "Write|Edit|Read" \
+  --description "AI evaluates file operations for security risks"
+
+# Permission request advisor
+hookmanager add permission-advisor PermissionRequest \
+  "Should this permission be granted? Consider the context and potential risks. Context: $ARGUMENTS" \
+  --type prompt \
+  --description "AI advises on permission requests"
+
+# Subagent completion monitor
+hookmanager add subagent-monitor SubagentStop \
+  "Did this subagent complete its task successfully? Analyze the result. Context: $ARGUMENTS" \
+  --type prompt \
+  --description "AI monitors subagent completion"
+
+# Post-tool evaluation
+hookmanager add post-tool-eval PostToolUse \
+  "Was this tool operation successful? Should we continue? Context: $ARGUMENTS" \
+  --type prompt \
+  --matcher "Bash|Run" \
+  --description "AI evaluates tool execution results"
+
+# Code review before execution
+hookmanager add code-review PreToolUse \
+  "Review this code change for potential issues. Check for: bugs, security issues, bad practices. Context: $ARGUMENTS" \
+  --type prompt \
+  --matcher "Edit|Write" \
+  --filter-patterns ".ts,.js,.py" \
+  --description "AI reviews code changes before execution"
 ```
 
 ### AI Decision Hooks
@@ -749,7 +918,7 @@ nvm use 20
   "version": "1.0.0",
   "hooks": [
     {
-      "id": "security-audit",
+      "id": "hook-1707123456789-xyz789",
       "name": "security-audit",
       "enabled": true,
       "events": ["PreToolUse"],
@@ -757,7 +926,9 @@ nvm use 20
         "type": "command",
         "command": "npm audit"
       },
-      "priority": 100
+      "priority": 100,
+      "createdAt": "2024-02-05T12:00:00.000Z",
+      "updatedAt": "2024-02-05T12:00:00.000Z"
     }
   ],
   "logLevel": "info"

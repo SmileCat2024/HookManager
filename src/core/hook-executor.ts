@@ -232,26 +232,7 @@ export class HookExecutor {
       };
     }
 
-    // Check filter
-    if (hook.filter && !this.checkFilter(hook.filter, context)) {
-      this.logger.debug(`Hook ${hookName} filter did not match, skipping`);
-      return {
-        hookId,
-        hookName,
-        event: context.event,
-        startTime: new Date().toISOString(),
-        endTime: new Date().toISOString(),
-        duration: 0,
-        result: {
-          success: true,
-          exitCode: 0,
-          stdout: 'Filter did not match',
-        },
-        blocked: false,
-      };
-    }
-
-    // Check matcher
+    // Check matcher (coarse-grained filtering - executed first)
     if (hook.matcher && !this.checkMatcher(hook.matcher, context)) {
       this.logger.debug(`Hook ${hookName} matcher did not match, skipping`);
       return {
@@ -265,6 +246,25 @@ export class HookExecutor {
           success: true,
           exitCode: 0,
           stdout: 'Matcher did not match',
+        },
+        blocked: false,
+      };
+    }
+
+    // Check filter (fine-grained filtering - executed after matcher)
+    if (hook.filter && !this.checkFilter(hook.filter, context)) {
+      this.logger.debug(`Hook ${hookName} filter did not match, skipping`);
+      return {
+        hookId,
+        hookName,
+        event: context.event,
+        startTime: new Date().toISOString(),
+        endTime: new Date().toISOString(),
+        duration: 0,
+        result: {
+          success: true,
+          exitCode: 0,
+          stdout: 'Filter did not match',
         },
         blocked: false,
       };
@@ -615,25 +615,8 @@ export class HookExecutor {
       HookEvent.SubagentStop,
     ];
 
-    // Debug log file path
-    const debugLogPath = 'C:\\Users\\zty20\\Desktop\\prompt-debug.log';
-
-    // Helper function to write debug log
-    const writeDebugLog = (message: string, data?: any) => {
-      const timestamp = new Date().toISOString();
-      const logEntry = `[${timestamp}] ${message}${data ? '\n' + JSON.stringify(data, null, 2) : ''}\n\n`;
-      try {
-        fs.appendFileSync(debugLogPath, logEntry, 'utf-8');
-      } catch (err) {
-        // Ignore write errors
-      }
-    };
-
-    writeDebugLog('=== executePrompt START ===', { event: context.event });
-
     // Check if event supports prompt-based decisions
     if (!decisionEvents.includes(context.event)) {
-      writeDebugLog('Event not supported', { event: context.event });
       this.logger.warn(`Event ${context.event} does not support prompt handler, skipping`, {
         hookId: context.event,
       });
@@ -646,7 +629,6 @@ export class HookExecutor {
 
     // Check if ProviderManager is available
     if (!this.providerManager) {
-      writeDebugLog('ProviderManager not available');
       this.logger.warn(`ProviderManager not initialized, cannot execute prompt handler`, {
         event: context.event,
       });
@@ -668,8 +650,6 @@ export class HookExecutor {
     const model = handler.model || 'haiku';
     const userPrompt = handler.prompt;
     const systemPrompt = handler.systemPrompt || 'You are a decision assistant. Evaluate the given context and respond with a JSON decision.';
-
-    writeDebugLog('Handler config', { model, userPrompt: userPrompt.substring(0, 100) });
 
     try {
       // Build hook prompt context
@@ -697,7 +677,6 @@ export class HookExecutor {
 
       // Execute via ProviderManager
       const startTime = Date.now();
-      writeDebugLog('Executing with ProviderManager...');
 
       const result = await this.providerManager.executeHookPrompt(
         hookContext,
@@ -707,14 +686,11 @@ export class HookExecutor {
       );
 
       const duration = Date.now() - startTime;
-      writeDebugLog('ProviderManager response received', { duration, result });
 
       this.logger.debug(`ProviderManager response received`, { duration });
 
       const ok = result.ok ?? true;
       const reason = result.reason || '';
-
-      writeDebugLog('Decision made', { ok, reason });
 
       // Map decision to event-specific output format
       // Based on: https://code.claude.com/docs/en/hooks
@@ -754,8 +730,6 @@ export class HookExecutor {
         };
       }
 
-      writeDebugLog('Result', { ok, reason, exitCode: hookResult.exitCode });
-
       this.logger.info(`Prompt handler executed`, {
         event: context.event,
         decision: ok ? 'allow' : 'deny',
@@ -765,9 +739,6 @@ export class HookExecutor {
       return hookResult;
     } catch (error) {
       const errorMessage = (error as Error).message;
-      const errorStack = (error as Error).stack;
-
-      writeDebugLog('ERROR', { errorMessage, errorStack: errorStack?.substring(0, 500) });
 
       this.logger.error(`Prompt handler execution failed`, {
         error: errorMessage,
@@ -792,12 +763,16 @@ export class HookExecutor {
 
   /**
    * Check if matcher matches
+   * For tool events: matches against context.tool
+   * For non-tool events: matches against event-specific metadata fields
    */
   private checkMatcher(matcher: string, context: HookContext): boolean {
+    // Wildcard patterns always match
     if (matcher === '*' || matcher === '' || matcher === '.*') {
       return true;
     }
 
+    // Tool events: match against tool name
     if (context.tool) {
       try {
         const regex = new RegExp(`^${matcher}$`);
@@ -808,7 +783,58 @@ export class HookExecutor {
       }
     }
 
+    // Non-tool events: match against event-specific metadata fields
+    const targetValue = this.getMatcherTargetForEvent(context.event, context.metadata);
+    if (targetValue) {
+      try {
+        const regex = new RegExp(`^${matcher}$`);
+        return regex.test(targetValue);
+      } catch {
+        return targetValue === matcher;
+      }
+    }
+
     return false;
+  }
+
+  /**
+   * Get the matcher target value for non-tool events
+   * Each event type may have a specific metadata field that can be matched
+   */
+  private getMatcherTargetForEvent(
+    event: HookEvent,
+    metadata: Record<string, any> | undefined
+  ): string | null {
+    if (!metadata) {
+      return null;
+    }
+
+    switch (event) {
+      case HookEvent.SessionStart:
+        // Match against: startup, resume, clear, compact
+        return metadata.source || null;
+
+      case HookEvent.SessionEnd:
+        // Match against: clear, logout, prompt_input_exit, bypass_permissions_disabled, other
+        return metadata.reason || null;
+
+      case HookEvent.SubagentStart:
+      case HookEvent.SubagentStop:
+        // Match against agent_type: Bash, Explore, Plan, Code, or custom name
+        return metadata.agent_type || null;
+
+      case HookEvent.Notification:
+        // Match against type: permission_prompt, idle_prompt, auth_success, elicitation_dialog
+        return metadata.type || null;
+
+      case HookEvent.PreCompact:
+        // Match against trigger: manual, auto
+        return metadata.trigger || null;
+
+      default:
+        // Events that don't support matcher matching
+        return null;
+    }
   }
 
   /**
@@ -822,9 +848,17 @@ export class HookExecutor {
       }
     }
 
-    // Check commands
-    if (filter.commands && context.command) {
-      if (!filter.commands.some((cmd: string) => context.command!.includes(cmd))) {
+    // Check commands - IMPORTANT: if filter.commands is set, we must have a matching command
+    if (filter.commands) {
+      // Skip filter check if command is not provided or is empty string
+      if (!context.command || context.command === '') {
+        return false;
+      }
+
+      const commandStr = String(context.command);
+      const matched = filter.commands.some((cmd: string) => commandStr.includes(cmd));
+
+      if (!matched) {
         return false;
       }
     }

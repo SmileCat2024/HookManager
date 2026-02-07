@@ -303,6 +303,46 @@ export class HookInterceptor {
   }
 
   /**
+   * Unregister hooks by ID or name (affects all scopes)
+   * Returns array of hooks that were removed
+   */
+  async unregisterHookByIdOrName(hookIdOrName: string): Promise<any[]> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    // Find all hooks matching by ID or name
+    const allHooks = this.registry.getAllHooks();
+    const matchingHooks = allHooks.filter(
+      (hook) => hook.id === hookIdOrName || hook.name === hookIdOrName
+    );
+
+    if (matchingHooks.length === 0) {
+      throw new HookError(`No hook found with ID or name: ${hookIdOrName}`, hookIdOrName);
+    }
+
+    const removedHooks: any[] = [];
+
+    for (const hook of matchingHooks) {
+      await this.registry.unregister(hook.id);
+
+      // Determine if this is a global or project hook
+      const isGlobal = hook.metadata?._scope === 'global';
+      await this.configManager.removeHook(hook.id, isGlobal);
+
+      removedHooks.push({
+        id: hook.id,
+        name: hook.name,
+        scope: isGlobal ? 'global' : 'project',
+      });
+
+      this.logger.info(`Unregistered hook: ${hook.name} (${hook.id}) [${isGlobal ? 'global' : 'project'}]`);
+    }
+
+    return removedHooks;
+  }
+
+  /**
    * Get all registered hooks
    */
   getHooks(): any[] {
@@ -359,6 +399,42 @@ export class HookInterceptor {
   }
 
   /**
+   * Enable hooks by ID or name (affects all scopes)
+   * Returns array of hooks that were enabled
+   */
+  async enableHookByIdOrName(hookIdOrName: string): Promise<any[]> {
+    // Find all hooks matching by ID or name
+    const allHooks = this.registry.getAllHooks();
+    const matchingHooks = allHooks.filter(
+      (hook) => hook.id === hookIdOrName || hook.name === hookIdOrName
+    );
+
+    if (matchingHooks.length === 0) {
+      throw new HookError(`No hook found with ID or name: ${hookIdOrName}`, hookIdOrName);
+    }
+
+    const enabledHooks: any[] = [];
+
+    for (const hook of matchingHooks) {
+      hook.enabled = true;
+
+      // Determine if this is a global or project hook
+      const isGlobal = hook.metadata?._scope === 'global';
+      await this.configManager.updateHook(hook.id, { enabled: true }, isGlobal);
+
+      enabledHooks.push({
+        id: hook.id,
+        name: hook.name,
+        scope: isGlobal ? 'global' : 'project',
+      });
+
+      this.logger.info(`Enabled hook: ${hook.name} (${hook.id}) [${isGlobal ? 'global' : 'project'}]`);
+    }
+
+    return enabledHooks;
+  }
+
+  /**
    * Disable a hook
    */
   async disableHook(hookId: string): Promise<void> {
@@ -373,6 +449,42 @@ export class HookInterceptor {
     const isGlobal = hook.metadata?._scope === 'global';
     await this.configManager.updateHook(hookId, { enabled: false }, isGlobal);
     this.logger.info(`Disabled hook: ${hookId}`);
+  }
+
+  /**
+   * Disable hooks by ID or name (affects all scopes)
+   * Returns array of hooks that were disabled
+   */
+  async disableHookByIdOrName(hookIdOrName: string): Promise<any[]> {
+    // Find all hooks matching by ID or name
+    const allHooks = this.registry.getAllHooks();
+    const matchingHooks = allHooks.filter(
+      (hook) => hook.id === hookIdOrName || hook.name === hookIdOrName
+    );
+
+    if (matchingHooks.length === 0) {
+      throw new HookError(`No hook found with ID or name: ${hookIdOrName}`, hookIdOrName);
+    }
+
+    const disabledHooks: any[] = [];
+
+    for (const hook of matchingHooks) {
+      hook.enabled = false;
+
+      // Determine if this is a global or project hook
+      const isGlobal = hook.metadata?._scope === 'global';
+      await this.configManager.updateHook(hook.id, { enabled: false }, isGlobal);
+
+      disabledHooks.push({
+        id: hook.id,
+        name: hook.name,
+        scope: isGlobal ? 'global' : 'project',
+      });
+
+      this.logger.info(`Disabled hook: ${hook.name} (${hook.id}) [${isGlobal ? 'global' : 'project'}]`);
+    }
+
+    return disabledHooks;
   }
 
   /**

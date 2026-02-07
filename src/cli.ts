@@ -14,6 +14,7 @@ import os from 'os';
 
 import { HookInterceptor } from './core/hook-interceptor';
 import { HookEvent, LogLevel, HookConfig, HookContext } from './types';
+import { validateMatcherForEvent, getMatcherValidationMessage, eventSupportsMatcher, getMatcherConfig } from './utils/event-validator';
 
 interface CliOptions {
   config?: string;
@@ -27,13 +28,36 @@ const program = new Command();
 
 program
   .name('hookmanager')
-  .description('Universal hook manager for Claude Code')
+  .description('Claude Code 通用钩子管理器')
   .version('1.0.0')
-  .option('--config <path>', 'Configuration file path')
-  .option('--project <path>', 'Project path')
-  .option('--log-level <level>', 'Log level', 'info')
-  .option('--json', 'Output as JSON')
-  .option('--verbose', 'Verbose output');
+  .addHelpText('after', `
+处理器类型:
+  command               执行 Shell 命令
+  prompt                使用 Claude AI 进行智能决策
+
+过滤机制 (执行顺序: Matcher → Filter):
+  --matcher <pattern>    粗粒度过滤 - 按事件特定字段 (正则表达式)
+  --filter-tools <tools> 细粒度过滤 - 按工具名称
+  --filter-commands <cmd> 细粒度过滤 - 按命令内容
+  --filter-patterns <p>  细粒度过滤 - 按参数模式
+
+示例:
+  $ hookmanager init
+  $ hookmanager add security-audit PreToolUse "npm audit" --matcher "Bash|Write"
+  $ hookmanager add ai-filter UserPromptSubmit "检查安全性" --type prompt
+  $ hookmanager add mcp-guard PreToolUse "验证" --matcher "mcp__.*"
+  $ hookmanager list
+  $ hookmanager disable security-audit
+  $ hookmanager logs --tail 20
+  $ hookmanager config --validate
+
+更多信息请访问: https://github.com/SmileCat2024/HookManager
+`)
+  .option('--config <path>', '配置文件路径')
+  .option('--project <path>', '项目路径')
+  .option('--log-level <level>', '日志级别 (debug, info, warn, error, silent)', 'info')
+  .option('--json', '以 JSON 格式输出')
+  .option('--verbose', '详细输出');
 
 interface InitOptions {
   preset?: string;
@@ -45,6 +69,7 @@ interface AddHookOptions {
   type?: string;
   description?: string;
   priority?: string;
+  matcher?: string;
   filterTools?: string;
   filterCommands?: string;
   filterPatterns?: string;
@@ -104,8 +129,8 @@ interface UninstallOptions {
 // ============================================================================
 program
   .command('init [path]')
-  .description('Initialize HookManager for a project')
-  .option('--preset <preset>', 'Preset configuration (minimal, full, security)')
+  .description('初始化项目的 HookManager 配置')
+  .option('--preset <preset>', '预设配置 (minimal, full, security)')
   .option('--global', 'Initialize global configuration')
   .option('--interactive', 'Interactive setup')
   .action(async (projectPath = process.cwd(), options: InitOptions) => {
@@ -204,19 +229,20 @@ program
 // ============================================================================
 program
   .command('add <name> <lifecycle>')
-  .description('Add a new hook')
-  .argument('<command>', 'Command, script, or prompt to execute')
-  .option('--type <type>', 'Handler type (command, script, module, prompt)', 'command')
-  .option('--description <text>', 'Hook description')
-  .option('--priority <number>', 'Execution priority (0-1000)', '50')
-  .option('--filter-tools <tools>', 'Filter by tools (comma-separated)')
-  .option('--filter-commands <commands>', 'Filter by commands (comma-separated)')
-  .option('--filter-patterns <patterns>', 'Filter by patterns (comma-separated)')
-  .option('--timeout <ms>', 'Timeout in milliseconds', '30000')
-  .option('--retry <number>', 'Number of retries', '0')
-  .option('--continue-on-error', 'Continue on error')
-  .option('--exit-code-blocking <codes>', 'Exit codes that block (comma-separated)', '2')
-  .option('--global', 'Add to global config (default: project)')
+  .description('添加新钩子')
+  .argument('<command>', '要执行的命令、脚本或提示词')
+  .option('--type <type>', '处理器类型 (command, prompt)', 'command')
+  .option('--description <text>', '钩子描述')
+  .option('--priority <number>', '执行优先级 (0-1000)', '50')
+  .option('--matcher <pattern>', 'Matcher 模式 (事件特定字段的正则表达式)')
+  .option('--filter-tools <tools>', '按工具过滤 (逗号分隔)')
+  .option('--filter-commands <commands>', '按命令内容过滤 (逗号分隔)')
+  .option('--filter-patterns <patterns>', '按参数模式过滤 (逗号分隔)')
+  .option('--timeout <ms>', '超时时间 (毫秒)', '30000')
+  .option('--retry <number>', '重试次数', '0')
+  .option('--continue-on-error', '错误时继续执行')
+  .option('--exit-code-blocking <codes>', '阻塞性退出码 (逗号分隔)', '2')
+  .option('--global', '添加到全局配置 (默认为项目级)')
   .action(async (name: string, lifecycle: string, command: string, options: AddHookOptions) => {
     const spinner = ora('Adding hook...').start();
     const json = program.opts().json;
@@ -235,6 +261,24 @@ program
       const validEvents = Object.values(HookEvent);
       if (!validEvents.includes(lifecycle as HookEvent)) {
         throw new Error(`Invalid lifecycle event: ${lifecycle}. Valid events: ${validEvents.join(', ')}`);
+      }
+
+      const hookEvent = lifecycle as HookEvent;
+
+      // Validate matcher if provided
+      if (options.matcher) {
+        const validationResult = validateMatcherForEvent(hookEvent, options.matcher);
+        if (!validationResult.valid) {
+          let errorMsg = validationResult.error || '';
+          if (validationResult.suggestions && validationResult.suggestions.length > 0) {
+            errorMsg += `\n\n${chalk.yellow('Valid matchers for ' + hookEvent + ':')}\n  ${chalk.gray(validationResult.suggestions.slice(0, 10).join('\n  '))}`;
+          }
+          const config = getMatcherConfig(hookEvent);
+          if (config.examples.length > 0) {
+            errorMsg += `\n\n${chalk.yellow('Examples:')}\n  ${chalk.gray(config.examples.slice(0, 3).join('\n  '))}`;
+          }
+          throw new Error(errorMsg);
+        }
       }
 
       // Parse filters
@@ -258,7 +302,7 @@ program
         : [2];
 
       // Validate handler type
-      const validTypes = ['command', 'script', 'module', 'prompt'];
+      const validTypes = ['command', 'prompt'];
       const handlerType = options.type || 'command';
       if (!validTypes.includes(handlerType)) {
         throw new Error(`Invalid handler type: ${handlerType}. Valid types: ${validTypes.join(', ')}`);
@@ -283,17 +327,23 @@ program
         };
       }
 
+      // Generate unique ID based on creation time (not the name)
+      const uniqueId = generateHookId();
+
       const hookConfig: Partial<HookConfig> = {
-        id: name,
+        id: uniqueId,
         name,
         description: options.description || '',
         enabled: true,
-        events: [lifecycle as HookEvent],
+        events: [hookEvent],
         handler,
+        matcher: options.matcher || undefined,
         filter: Object.keys(filter).length > 0 ? filter : undefined,
         priority: parseInt(options.priority, 10),
         continueOnError: options.continueOnError,
         exitCodeBlocking,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
 
       await interceptor.registerHook(hookConfig, options.global || false);
@@ -305,6 +355,9 @@ program
         spinner.succeed(`Hook "${name}" added successfully`);
         console.log(chalk.gray(`  Type: ${handlerType}`));
         console.log(chalk.gray(`  Lifecycle: ${lifecycle}`));
+        if (options.matcher) {
+          console.log(chalk.gray(`  Matcher: ${options.matcher}`));
+        }
         if (handlerType === 'prompt') {
           console.log(chalk.gray(`  Prompt: ${command.substring(0, 80)}${command.length > 80 ? '...' : ''}`));
         } else {
@@ -327,29 +380,31 @@ program
 // Remove Hook Command
 // ============================================================================
 program
-  .command('remove <hook-id>')
-  .description('Remove a hook')
-  .option('--global', 'Remove from global config (default: project)')
-  .action(async (hookId: string, options: OrderOptions) => {
+  .command('remove <hook-id-or-name>')
+  .description('移除钩子 (支持 ID 或名称，影响所有作用域)')
+  .action(async (hookIdOrName: string, options: OrderOptions) => {
     const spinner = ora('Removing hook...').start();
     const json = program.opts().json;
 
     try {
       const interceptor = HookInterceptor.create({
         configPath: program.opts().config,
-        projectPath: options.global ? undefined : process.cwd(),
+        projectPath: process.cwd(),
         logLevel: program.opts().logLevel as LogLevel,
         autoInitialize: false,
       });
 
       await interceptor.initialize();
-      await interceptor.unregisterHook(hookId);
+
+      // Find and remove hooks matching by ID or name (both global and project)
+      const removedHooks = await interceptor.unregisterHookByIdOrName(hookIdOrName);
+
       await interceptor.destroy();
 
       if (json) {
-        console.log(JSON.stringify({ success: true, hookId }, null, 2));
+        console.log(JSON.stringify({ success: true, removedHooks }, null, 2));
       } else {
-        spinner.succeed(`Hook "${hookId}" removed successfully`);
+        spinner.succeed(`Removed ${removedHooks.length} hook(s): ${removedHooks.map(h => h.name).join(', ')}`);
       }
     } catch (error) {
       spinner.fail('Failed to remove hook');
@@ -367,10 +422,10 @@ program
 // ============================================================================
 program
   .command('list [lifecycle]')
-  .description('List hooks (optionally filtered by lifecycle)')
-  .option('--enabled', 'Show only enabled hooks')
-  .option('--disabled', 'Show only disabled hooks')
-  .option('--global', 'Show global hooks only (default: project)')
+  .description('列出钩子 (可选按生命周期过滤，默认显示项目级钩子)')
+  .option('--enabled', '仅显示已启用的钩子')
+  .option('--disabled', '仅显示已禁用的钩子')
+  .option('--global', '仅显示全局钩子')
   .action(async (lifecycle: string | undefined, options: ListOptions) => {
     const spinner = ora('Loading hooks...').start();
     const json = program.opts().json;
@@ -434,9 +489,11 @@ program
           const status = hook.enabled ? chalk.green('✓') : chalk.gray('✗');
           const events = hook.events.join(', ');
           const priority = hook.priority.toString().padStart(3, ' ');
+          const scope = hook.metadata?._scope || 'unknown';
 
           console.log(`${status} ${chalk.bold(hook.name)}`);
           console.log(`  ${chalk.cyan('ID:')} ${chalk.yellow(hook.id)}`);
+          console.log(`  ${chalk.gray('Scope:')} ${scope === 'global' ? chalk.blue('global') : chalk.green('project')}`);
           console.log(`  ${chalk.gray('Lifecycle:')} ${events}`);
           console.log(`  ${chalk.gray('Priority:')} ${priority}`);
           console.log(`  ${chalk.gray('Handler:')} ${hook.handler.type}`);
@@ -461,29 +518,31 @@ program
 // Enable/Disable Hook Commands
 // ============================================================================
 program
-  .command('enable <hook-id>')
-  .description('Enable a hook')
-  .option('--global', 'Enable global hook (default: project)')
-  .action(async (hookId: string, options: OrderOptions) => {
+  .command('enable <hook-id-or-name>')
+  .description('启用钩子 (支持 ID 或名称，影响所有作用域)')
+  .action(async (hookIdOrName: string, options: OrderOptions) => {
     const spinner = ora('Enabling hook...').start();
     const json = program.opts().json;
 
     try {
       const interceptor = HookInterceptor.create({
         configPath: program.opts().config,
-        projectPath: options.global ? undefined : process.cwd(),
+        projectPath: process.cwd(),
         logLevel: program.opts().logLevel as LogLevel,
         autoInitialize: false,
       });
 
       await interceptor.initialize();
-      await interceptor.enableHook(hookId);
+
+      // Find hooks matching by ID or name (both global and project)
+      const enabledHooks = await interceptor.enableHookByIdOrName(hookIdOrName);
+
       await interceptor.destroy();
 
       if (json) {
-        console.log(JSON.stringify({ success: true, hookId }, null, 2));
+        console.log(JSON.stringify({ success: true, enabledHooks }, null, 2));
       } else {
-        spinner.succeed(`Hook "${hookId}" enabled`);
+        spinner.succeed(`Enabled ${enabledHooks.length} hook(s): ${enabledHooks.map(h => h.name).join(', ')}`);
       }
     } catch (error) {
       spinner.fail('Failed to enable hook');
@@ -497,29 +556,31 @@ program
   });
 
 program
-  .command('disable <hook-id>')
-  .description('Disable a hook')
-  .option('--global', 'Disable global hook (default: project)')
-  .action(async (hookId: string, options: OrderOptions) => {
+  .command('disable <hook-id-or-name>')
+  .description('禁用钩子 (支持 ID 或名称，影响所有作用域)')
+  .action(async (hookIdOrName: string, options: OrderOptions) => {
     const spinner = ora('Disabling hook...').start();
     const json = program.opts().json;
 
     try {
       const interceptor = HookInterceptor.create({
         configPath: program.opts().config,
-        projectPath: options.global ? undefined : process.cwd(),
+        projectPath: process.cwd(),
         logLevel: program.opts().logLevel as LogLevel,
         autoInitialize: false,
       });
 
       await interceptor.initialize();
-      await interceptor.disableHook(hookId);
+
+      // Find hooks matching by ID or name (both global and project)
+      const disabledHooks = await interceptor.disableHookByIdOrName(hookIdOrName);
+
       await interceptor.destroy();
 
       if (json) {
-        console.log(JSON.stringify({ success: true, hookId }, null, 2));
+        console.log(JSON.stringify({ success: true, disabledHooks }, null, 2));
       } else {
-        spinner.succeed(`Hook "${hookId}" disabled`);
+        spinner.succeed(`Disabled ${disabledHooks.length} hook(s): ${disabledHooks.map(h => h.name).join(', ')}`);
       }
     } catch (error) {
       spinner.fail('Failed to disable hook');
@@ -537,8 +598,8 @@ program
 // ============================================================================
 program
   .command('order <hook-id> <position>')
-  .description('Change hook execution order')
-  .option('--global', 'Change global hook priority (default: project)')
+  .description('更改钩子执行顺序')
+  .option('--global', '更改全局钩子优先级 (默认为项目级)')
   .action(async (hookId: string, position: string, options: OrderOptions) => {
     const spinner = ora('Updating hook order...').start();
     const json = program.opts().json;
@@ -576,8 +637,8 @@ program
 // ============================================================================
 program
   .command('logs')
-  .description('View and manage hook logs')
-  .option('--tail <number>', 'Show last N lines', '50')
+  .description('查看和管理钩子日志')
+  .option('--tail <number>', '显示最后 N 行', '50')
   .option('--follow', 'Follow log output')
   .option('--filter <pattern>', 'Filter logs by pattern')
   .option('--level <level>', 'Filter by log level')
@@ -657,8 +718,8 @@ program
 // ============================================================================
 program
   .command('config')
-  .description('View and manage configuration')
-  .option('--show', 'Show current configuration')
+  .description('查看和管理配置')
+  .option('--show', '显示当前配置')
   .option('--edit', 'Edit configuration')
   .option('--validate', 'Validate configuration')
   .option('--export <file>', 'Export configuration')
@@ -734,8 +795,8 @@ program
 // ============================================================================
 program
   .command('install')
-  .description('Install universal hook into Claude Code settings')
-  .option('--global', 'Install globally (default: install for current project)')
+  .description('将通用钩子安装到 Claude Code 设置')
+  .option('--global', '全局安装 (默认为当前项目安装)')
   .action(async (options: InstallOptions) => {
     const spinner = ora('Installing universal hook...').start();
     const json = program.opts().json;
@@ -765,8 +826,8 @@ program
 // ============================================================================
 program
   .command('uninstall')
-  .description('Remove HookManager universal hooks from Claude Code settings')
-  .option('--global', 'Remove from global settings (default: project)')
+  .description('从 Claude Code 设置中移除 HookManager 通用钩子')
+  .option('--global', '从全局设置中移除 (默认为项目级)')
   .option('--purge', 'Remove all hooks configuration including .claude/hooks/ folder')
   .action(async (options: UninstallOptions) => {
     const isGlobal = options.global || false;
@@ -820,8 +881,8 @@ program
 // ============================================================================
 program
   .command('validate')
-  .description('Validate configuration and hooks')
-  .option('--global', 'Validate global configuration (default: project)')
+  .description('验证配置和钩子')
+  .option('--global', '验证全局配置 (默认为项目级)')
   .action(async (options: ValidateOptions) => {
     const spinner = ora('Validating configuration...').start();
     const json = program.opts().json;
@@ -870,8 +931,8 @@ program
 // ============================================================================
 program
   .command('stats')
-  .description('Show execution statistics')
-  .option('--hook <hook-id>', 'Show stats for specific hook')
+  .description('显示执行统计信息')
+  .option('--hook <hook-id>', '显示特定钩子的统计信息')
   .action(async (options: StatsOptions) => {
     const json = program.opts().json;
 
@@ -947,9 +1008,10 @@ program
 // ============================================================================
 program
   .command('intercept')
-  .description('Universal hook interceptor - entry point for all Claude Code events')
-  .option('--event <event>', 'Lifecycle event type (required)')
+  .description('通用钩子拦截器 - 所有 Claude Code 事件的入口点')
+  .option('--event <event>', '生命周期事件类型 (必需)')
   .option('--tool <tool>', 'Tool name')
+  .option('--command <command>', 'Command string (for Bash/Run tools)')
   .option('--input <input>', 'Tool input (JSON string)')
   .option('--success <success>', 'Success status (true/false)')
   .option('--prompt <prompt>', 'User prompt')
@@ -967,10 +1029,12 @@ program
       // Build event context
       const eventContext: Partial<HookContext> = {
         tool: options.tool,
+        command: options.command, // Add command support
         sessionId: options.sessionId,
       };
 
-      // Read stdin for JSON input (UserPromptSubmit hook provides data via stdin)
+      // Read stdin for JSON input
+      // All events from Claude Code pass data via stdin JSON
       let stdinData = '';
       if (process.stdin.isTTY) {
         // No stdin data, use command line arguments
@@ -983,14 +1047,67 @@ program
         if (stdinData.trim()) {
           try {
             const stdinJson = JSON.parse(stdinData);
-            // Extract prompt field for UserPromptSubmit
+
+            // Map all stdin JSON fields to eventContext
+            // UserPromptSubmit specific
             if (stdinJson.prompt !== undefined) {
               eventContext.input = stdinJson.prompt;
             }
-            // Store other fields for potential use
+
+            // Common fields (all events)
             if (stdinJson.session_id) eventContext.sessionId = stdinJson.session_id;
             if (stdinJson.cwd) eventContext.projectDir = stdinJson.cwd;
-          } catch {
+
+            // Tool events (PreToolUse, PostToolUse, PostToolUseFailure)
+            if (stdinJson.tool) eventContext.tool = stdinJson.tool;
+            if (stdinJson.command) eventContext.command = stdinJson.command;
+            if (stdinJson.input !== undefined) eventContext.input = stdinJson.input;
+            if (stdinJson.output !== undefined) eventContext.output = stdinJson.output;
+            if (stdinJson.success !== undefined) {
+              eventContext.metadata = eventContext.metadata || {};
+              eventContext.metadata.success = stdinJson.success;
+            }
+
+            // Event metadata
+            if (stdinJson.metadata) eventContext.metadata = { ...eventContext.metadata, ...stdinJson.metadata };
+            if (stdinJson.error) {
+              eventContext.metadata = eventContext.metadata || {};
+              eventContext.metadata.error = stdinJson.error;
+            }
+
+            // Permission info
+            if (stdinJson.permission_mode) {
+              eventContext.metadata = eventContext.metadata || {};
+              eventContext.metadata.permissionMode = stdinJson.permission_mode;
+            }
+            if (stdinJson.permission) {
+              eventContext.metadata = eventContext.metadata || {};
+              eventContext.metadata.permission = stdinJson.permission;
+            }
+
+            // Agent info
+            if (stdinJson.agent_type) {
+              eventContext.metadata = eventContext.metadata || {};
+              eventContext.metadata.agent_type = stdinJson.agent_type;
+            }
+            if (stdinJson.agentId) {
+              eventContext.metadata = eventContext.metadata || {};
+              eventContext.metadata.agentId = stdinJson.agentId;
+            }
+
+            // Task info
+            if (stdinJson.taskId) {
+              eventContext.metadata = eventContext.metadata || {};
+              eventContext.metadata.taskId = stdinJson.taskId;
+            }
+
+            // Event name
+            if (stdinJson.hook_event_name) {
+              eventContext.metadata = eventContext.metadata || {};
+              eventContext.metadata.hook_event_name = stdinJson.hook_event_name;
+            }
+
+          } catch (parseError) {
             // Not valid JSON, use as raw input
             eventContext.input = stdinData;
           }
@@ -1057,50 +1174,24 @@ program
 // ============================================================================
 program
   .command('help')
-  .description('Show detailed help')
+  .description('显示帮助信息')
   .action(() => {
-    console.log(chalk.bold('\nHookManager - Universal Hook Manager for Claude Code\n'));
-    console.log('Usage: hookmanager <command> [options]\n');
-    console.log('Commands:');
-    console.log('  init [path]           Initialize HookManager');
-    console.log('  add <name> <lifecycle> <command>  Add a new hook');
-    console.log('  remove <hook-id>      Remove a hook');
-    console.log('  list [lifecycle]      List hooks');
-    console.log('  enable <hook-id>      Enable a hook');
-    console.log('  disable <hook-id>     Disable a hook');
-    console.log('  order <hook-id> <pos> Change hook order');
-    console.log('  logs                  View and manage logs');
-    console.log('  config                Manage configuration');
-    console.log('  install               Install universal hook');
-    console.log('  uninstall             Remove universal hooks');
-    console.log('  validate              Validate configuration');
-    console.log('  stats                 Show execution statistics');
-    console.log('  intercept             Internal event interceptor');
-    console.log('  help                  Show this help\n');
-    console.log('Global Options:');
-    console.log('  --config <path>       Configuration file path');
-    console.log('  --project <path>      Project path');
-    console.log('  --log-level <level>   Log level (debug, info, warn, error, silent)');
-    console.log('  --json                Output as JSON');
-    console.log('  --verbose             Verbose output\n');
-    console.log('Handler Types:');
-    console.log('  command               Execute a shell command');
-    console.log('  script                Execute a script file');
-    console.log('  module               Load and execute a Node.js module');
-    console.log('  prompt               Use Claude AI to make intelligent decisions\n');
-    console.log('Examples:');
-    console.log('  hookmanager init');
-    console.log('  hookmanager add security-audit PreToolUse "npm audit" --type command');
-    console.log('  hookmanager add ai-decision PreToolUse "Should I allow this tool? Context: $ARGUMENTS" --type prompt');
-    console.log('  hookmanager list');
-    console.log('  hookmanager logs --tail 20');
-    console.log('  hookmanager config --validate');
-    console.log('  hookmanager intercept --event PreToolUse --tool Write --input "test"\n');
+    program.help();
   });
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/**
+ * Generate a unique hook ID based on creation time
+ * Format: hook-<timestamp>-<random>
+ */
+function generateHookId(): string {
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substring(2, 9);
+  return `hook-${timestamp}-${random}`;
+}
 
 async function installUniversalHook(isGlobal: boolean = false): Promise<void> {
   const settingsPath = isGlobal
@@ -1120,14 +1211,15 @@ async function installUniversalHook(isGlobal: boolean = false): Promise<void> {
   }
 
   // Universal hook entries - inject into specific lifecycle events
-  // Based on official documentation: https://code.claude.com/docs/en/hooks
+  // Based on official Claude Code documentation
+  // Data is passed via stdin JSON, not command line arguments
   const universalHooks = [
     {
       event: 'PreToolUse',
       matcher: 'Bash',
       hooks: [{
         type: 'command',
-        command: 'hookmanager intercept --event PreToolUse --tool "$TOOL_NAME"'
+        command: 'hookmanager intercept --event PreToolUse'
       }]
     },
     {
@@ -1135,7 +1227,7 @@ async function installUniversalHook(isGlobal: boolean = false): Promise<void> {
       matcher: 'Write|Edit',
       hooks: [{
         type: 'command',
-        command: 'hookmanager intercept --event PreToolUse --tool "$TOOL_NAME"'
+        command: 'hookmanager intercept --event PreToolUse'
       }]
     },
     {
@@ -1143,7 +1235,7 @@ async function installUniversalHook(isGlobal: boolean = false): Promise<void> {
       matcher: '*',
       hooks: [{
         type: 'command',
-        command: 'hookmanager intercept --event PostToolUse --tool "$TOOL_NAME"'
+        command: 'hookmanager intercept --event PostToolUse'
       }]
     },
     {
@@ -1151,7 +1243,7 @@ async function installUniversalHook(isGlobal: boolean = false): Promise<void> {
       matcher: '*',
       hooks: [{
         type: 'command',
-        command: 'hookmanager intercept --event UserPromptSubmit --prompt "$PROMPT"'
+        command: 'hookmanager intercept --event UserPromptSubmit'
       }]
     },
     {
@@ -1167,7 +1259,7 @@ async function installUniversalHook(isGlobal: boolean = false): Promise<void> {
       matcher: '*',
       hooks: [{
         type: 'command',
-        command: 'hookmanager intercept --event PostToolUseFailure --tool "$TOOL_NAME"'
+        command: 'hookmanager intercept --event PostToolUseFailure'
       }]
     },
     {
@@ -1203,11 +1295,35 @@ async function installUniversalHook(isGlobal: boolean = false): Promise<void> {
       }]
     },
     {
-      event: 'Setup',
+      event: 'Notification',
       matcher: '*',
       hooks: [{
         type: 'command',
-        command: 'hookmanager intercept --event Setup'
+        command: 'hookmanager intercept --event Notification'
+      }]
+    },
+    {
+      event: 'TeammateIdle',
+      matcher: '*',
+      hooks: [{
+        type: 'command',
+        command: 'hookmanager intercept --event TeammateIdle'
+      }]
+    },
+    {
+      event: 'TaskCompleted',
+      matcher: '*',
+      hooks: [{
+        type: 'command',
+        command: 'hookmanager intercept --event TaskCompleted'
+      }]
+    },
+    {
+      event: 'PermissionRequest',
+      matcher: '*',
+      hooks: [{
+        type: 'command',
+        command: 'hookmanager intercept --event PermissionRequest'
       }]
     },
     {
